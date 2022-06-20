@@ -33,7 +33,7 @@ pub struct CodegenError {
 
 #[macro_export]
 macro_rules! codegen_error {
-    ($e:expr) => {return Err(CodegenError{message : format!($e)})}
+    ($($arg:tt)*) => {return Err(CodegenError{message : format!($($arg)*)})}
 }
 
 pub trait MaybeImmediate {
