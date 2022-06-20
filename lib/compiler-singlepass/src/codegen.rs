@@ -307,7 +307,10 @@ impl<'a, M: Machine> FuncGen<'a, M> {
     }
 
     /// Releases locations used for stack value.
-    fn release_locations(&mut self, locs: &[Location<M::GPR, M::SIMD>]) {
+    fn release_locations(
+        &mut self,
+        locs: &[Location<M::GPR, M::SIMD>],
+    ) -> Result<(), CodegenError> {
         let mut delta_stack_offset: usize = 0;
 
         for loc in locs.iter().rev() {
@@ -325,28 +328,37 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 Location::Memory(y, x) => {
                     if y == self.machine.local_pointer() {
                         if x >= 0 {
-                            unreachable!();
+                            codegen_error!("Invalid memory offset {}", x);
                         }
                         let offset = (-x) as usize;
                         if offset != self.stack_offset.0 {
-                            unreachable!();
+                            codegen_error!(
+                                "Invalid memory offset {}!={}",
+                                offset,
+                                self.stack_offset.0
+                            );
                         }
                         self.stack_offset.0 -= 8;
                         delta_stack_offset += 8;
-                        self.state.stack_values.pop().unwrap();
+                        self.state.stack_values.pop().ok_or(CodegenError {
+                            message: "Empty stack_value".to_string(),
+                        })?;
                     }
                 }
                 _ => {}
             }
-            self.state.wasm_stack.pop().unwrap();
+            self.state.wasm_stack.pop().ok_or(CodegenError {
+                message: "Pop with wasm stack empty".to_string(),
+            })?;
         }
         let delta_stack_offset = self.machine.round_stack_adjust(delta_stack_offset);
         if delta_stack_offset != 0 {
             self.machine.restore_stack(delta_stack_offset as u32);
         }
+        Ok(())
     }
     /// Releases locations used for stack value.
-    fn release_locations_value(&mut self, stack_depth: usize) {
+    fn release_locations_value(&mut self, stack_depth: usize) -> Result<(), CodegenError> {
         let mut delta_stack_offset: usize = 0;
         let locs: &[Location<M::GPR, M::SIMD>] = &self.value_stack[stack_depth..];
 
@@ -365,29 +377,41 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 Location::Memory(y, x) => {
                     if y == self.machine.local_pointer() {
                         if x >= 0 {
-                            unreachable!();
+                            codegen_error!("Invalid memory offset {}", x);
                         }
                         let offset = (-x) as usize;
                         if offset != self.stack_offset.0 {
-                            unreachable!();
+                            codegen_error!(
+                                "Invalid memory offset {}!={}",
+                                offset,
+                                self.stack_offset.0
+                            );
                         }
                         self.stack_offset.0 -= 8;
                         delta_stack_offset += 8;
-                        self.state.stack_values.pop().unwrap();
+                        self.state.stack_values.pop().ok_or(CodegenError {
+                            message: "Pop with values stack empty".to_string(),
+                        })?;
                     }
                 }
                 _ => {}
             }
-            self.state.wasm_stack.pop().unwrap();
+            self.state.wasm_stack.pop().ok_or(CodegenError {
+                message: "Pop with wasm stack empty".to_string(),
+            })?;
         }
 
         let delta_stack_offset = self.machine.round_stack_adjust(delta_stack_offset);
         if delta_stack_offset != 0 {
             self.machine.adjust_stack(delta_stack_offset as u32);
         }
+        Ok(())
     }
 
-    fn release_locations_only_regs(&mut self, locs: &[Location<M::GPR, M::SIMD>]) {
+    fn release_locations_only_regs(
+        &mut self,
+        locs: &[Location<M::GPR, M::SIMD>],
+    ) -> Result<(), CodegenError> {
         for loc in locs.iter().rev() {
             match *loc {
                 Location::GPR(ref x) => {
@@ -404,24 +428,30 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
             // Wasm state popping is deferred to `release_locations_only_osr_state`.
         }
+        Ok(())
     }
 
-    fn release_locations_only_stack(&mut self, locs: &[Location<M::GPR, M::SIMD>]) {
+    fn release_locations_only_stack(
+        &mut self,
+        locs: &[Location<M::GPR, M::SIMD>],
+    ) -> Result<(), CodegenError> {
         let mut delta_stack_offset: usize = 0;
 
         for loc in locs.iter().rev() {
             if let Location::Memory(y, x) = *loc {
                 if y == self.machine.local_pointer() {
                     if x >= 0 {
-                        unreachable!();
+                        codegen_error!("Invalid memory offset {}", x);
                     }
                     let offset = (-x) as usize;
                     if offset != self.stack_offset.0 {
-                        unreachable!();
+                        codegen_error!("Invalid memory offset {}!={}", offset, self.stack_offset.0);
                     }
                     self.stack_offset.0 -= 8;
                     delta_stack_offset += 8;
-                    self.state.stack_values.pop().unwrap();
+                    self.state.stack_values.pop().ok_or(CodegenError {
+                        message: "Pop on empty value stack".to_string(),
+                    })?;
                 }
             }
             // Wasm state popping is deferred to `release_locations_only_osr_state`.
@@ -431,9 +461,10 @@ impl<'a, M: Machine> FuncGen<'a, M> {
         if delta_stack_offset != 0 {
             self.machine.pop_stack_locals(delta_stack_offset as u32);
         }
+        Ok(())
     }
 
-    fn release_locations_only_osr_state(&mut self, n: usize) {
+    fn release_locations_only_osr_state(&mut self, n: usize) -> Result<(), CodegenError> {
         let new_length = self
             .state
             .wasm_stack
@@ -441,9 +472,10 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             .checked_sub(n)
             .expect("release_locations_only_osr_state: length underflow");
         self.state.wasm_stack.truncate(new_length);
+        Ok(())
     }
 
-    fn release_locations_keep_state(&mut self, stack_depth: usize) {
+    fn release_locations_keep_state(&mut self, stack_depth: usize) -> Result<(), CodegenError> {
         let mut delta_stack_offset: usize = 0;
         let mut stack_offset = self.stack_offset.0;
         let locs = &self.value_stack[stack_depth..];
@@ -452,11 +484,11 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             if let Location::Memory(y, x) = *loc {
                 if y == self.machine.local_pointer() {
                     if x >= 0 {
-                        unreachable!();
+                        codegen_error!("Invalid memory offset {}", x);
                     }
                     let offset = (-x) as usize;
                     if offset != stack_offset {
-                        unreachable!();
+                        codegen_error!("Invalid memory offset {}!={}", offset, self.stack_offset.0);
                     }
                     stack_offset -= 8;
                     delta_stack_offset += 8;
@@ -468,6 +500,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
         if delta_stack_offset != 0 {
             self.machine.pop_stack_locals(delta_stack_offset as u32);
         }
+        Ok(())
     }
 
     fn init_locals(
@@ -657,23 +690,22 @@ impl<'a, M: Machine> FuncGen<'a, M> {
     fn get_location_released(
         &mut self,
         loc: Location<M::GPR, M::SIMD>,
-    ) -> Location<M::GPR, M::SIMD> {
-        self.release_locations(&[loc]);
-        loc
+    ) -> Result<Location<M::GPR, M::SIMD>, CodegenError> {
+        self.release_locations(&[loc])?;
+        Ok(loc)
     }
 
-    fn pop_value_released(&mut self) -> Location<M::GPR, M::SIMD> {
-        let loc = self
-            .value_stack
-            .pop()
-            .expect("pop_value_released: value stack is empty");
+    fn pop_value_released(&mut self) -> Result<Location<M::GPR, M::SIMD>, CodegenError> {
+        let loc = self.value_stack.pop().ok_or(CodegenError {
+            message: "pop_value_released: value stack is empty".to_string(),
+        })?;
         self.get_location_released(loc)
     }
 
     /// Prepare data for binary operator with 2 inputs and 1 output.
     fn i2o1_prepare(&mut self, ty: WpType) -> Result<I2O1<M::GPR, M::SIMD>, CodegenError> {
-        let loc_b = self.pop_value_released();
-        let loc_a = self.pop_value_released();
+        let loc_b = self.pop_value_released()?;
+        let loc_a = self.pop_value_released()?;
         let ret = self.acquire_locations(
             &[(ty, MachineValue::WasmStack(self.value_stack.len()))],
             false,
@@ -1226,7 +1258,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     Location::Memory(tmp, 0)
                 };
                 let ty = type_to_wp_type(self.module.globals[global_index].ty);
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 if ty.is_float() {
                     let fp = self.fp_stack.pop1()?;
                     if self.machine.arch_supports_canonicalize_nan()
@@ -1266,7 +1298,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
             Operator::LocalSet { local_index } => {
                 let local_index = local_index as usize;
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
 
                 if self.local_types[local_index].is_float() {
                     let fp = self.fp_stack.pop1()?;
@@ -1403,7 +1435,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.i32_cmp_ne(loc_a, loc_b, ret);
             }
             Operator::I32Eqz => {
-                let loc_a = self.pop_value_released();
+                let loc_a = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1412,7 +1444,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.value_stack.push(ret);
             }
             Operator::I32Clz => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1421,7 +1453,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.i32_clz(loc, ret);
             }
             Operator::I32Ctz => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1430,7 +1462,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.i32_ctz(loc, ret);
             }
             Operator::I32Popcnt => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1572,7 +1604,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.i64_cmp_ne(loc_a, loc_b, ret);
             }
             Operator::I64Eqz => {
-                let loc_a = self.pop_value_released();
+                let loc_a = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1581,7 +1613,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.value_stack.push(ret);
             }
             Operator::I64Clz => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1590,7 +1622,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.i64_clz(loc, ret);
             }
             Operator::I64Ctz => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1599,7 +1631,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.i64_ctz(loc, ret);
             }
             Operator::I64Popcnt => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1660,7 +1692,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.i64_cmp_ge_s(loc_a, loc_b, ret);
             }
             Operator::I64ExtendI32U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1679,7 +1711,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 }
             }
             Operator::I64ExtendI32S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1689,7 +1721,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     .emit_relaxed_sign_extension(Size::S32, loc, Size::S64, ret);
             }
             Operator::I32Extend8S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1700,7 +1732,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     .emit_relaxed_sign_extension(Size::S8, loc, Size::S32, ret);
             }
             Operator::I32Extend16S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1711,7 +1743,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     .emit_relaxed_sign_extension(Size::S16, loc, Size::S32, ret);
             }
             Operator::I64Extend8S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1722,7 +1754,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     .emit_relaxed_sign_extension(Size::S8, loc, Size::S64, ret);
             }
             Operator::I64Extend16S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1733,7 +1765,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     .emit_relaxed_sign_extension(Size::S16, loc, Size::S64, ret);
             }
             Operator::I64Extend32S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1744,7 +1776,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     .emit_relaxed_sign_extension(Size::S32, loc, Size::S64, ret);
             }
             Operator::I32WrapI64 => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1841,7 +1873,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.fp_stack.pop1()?;
                 self.fp_stack
                     .push(FloatValue::cncl_f32(self.value_stack.len() - 1));
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1853,7 +1885,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.fp_stack.pop1()?;
                 self.fp_stack
                     .push(FloatValue::cncl_f32(self.value_stack.len() - 1));
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1865,7 +1897,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.fp_stack.pop1()?;
                 self.fp_stack
                     .push(FloatValue::cncl_f32(self.value_stack.len() - 1));
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1877,7 +1909,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.fp_stack.pop1()?;
                 self.fp_stack
                     .push(FloatValue::cncl_f32(self.value_stack.len() - 1));
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1889,7 +1921,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.fp_stack.pop1()?;
                 self.fp_stack
                     .push(FloatValue::cncl_f32(self.value_stack.len() - 1));
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1939,7 +1971,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             Operator::F32Abs => {
                 // Preserve canonicalization state.
 
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -1952,7 +1984,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             Operator::F32Neg => {
                 // Preserve canonicalization state.
 
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2050,7 +2082,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.fp_stack.pop1()?;
                 self.fp_stack
                     .push(FloatValue::cncl_f64(self.value_stack.len() - 1));
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2062,7 +2094,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.fp_stack.pop1()?;
                 self.fp_stack
                     .push(FloatValue::cncl_f64(self.value_stack.len() - 1));
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2074,7 +2106,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.fp_stack.pop1()?;
                 self.fp_stack
                     .push(FloatValue::cncl_f64(self.value_stack.len() - 1));
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2086,7 +2118,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.fp_stack.pop1()?;
                 self.fp_stack
                     .push(FloatValue::cncl_f64(self.value_stack.len() - 1));
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2098,7 +2130,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.fp_stack.pop1()?;
                 self.fp_stack
                     .push(FloatValue::cncl_f64(self.value_stack.len() - 1));
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2149,7 +2181,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             Operator::F64Abs => {
                 // Preserve canonicalization state.
 
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2162,7 +2194,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             Operator::F64Neg => {
                 // Preserve canonicalization state.
 
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2175,7 +2207,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             Operator::F64PromoteF32 => {
                 let fp = self.fp_stack.pop1()?;
                 self.fp_stack.push(fp.promote(self.value_stack.len() - 1)?);
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2186,7 +2218,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             Operator::F32DemoteF64 => {
                 let fp = self.fp_stack.pop1()?;
                 self.fp_stack.push(fp.demote(self.value_stack.len() - 1)?);
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2196,7 +2228,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I32ReinterpretF32 => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2216,7 +2248,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 }
             }
             Operator::F32ReinterpretI32 => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2231,7 +2263,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I64ReinterpretF64 => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2251,7 +2283,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 }
             }
             Operator::F64ReinterpretI64 => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2266,7 +2298,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I32TruncF32U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2278,7 +2310,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I32TruncSatF32U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2290,7 +2322,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I32TruncF32S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2301,7 +2333,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.convert_i32_f32(loc, ret, true, false);
             }
             Operator::I32TruncSatF32S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2313,7 +2345,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I64TruncF32S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2325,7 +2357,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I64TruncSatF32S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2337,7 +2369,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I64TruncF32U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2348,7 +2380,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.convert_i64_f32(loc, ret, false, false);
             }
             Operator::I64TruncSatF32U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2360,7 +2392,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I32TruncF64U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2372,7 +2404,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I32TruncSatF64U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2384,7 +2416,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I32TruncF64S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2396,7 +2428,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I32TruncSatF64S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2408,7 +2440,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I64TruncF64S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2420,7 +2452,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I64TruncSatF64S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2432,7 +2464,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I64TruncF64U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2444,7 +2476,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::I64TruncSatF64U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2456,7 +2488,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::F32ConvertI32S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2468,7 +2500,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.convert_f32_i32(loc, true, ret);
             }
             Operator::F32ConvertI32U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2480,7 +2512,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.convert_f32_i32(loc, false, ret);
             }
             Operator::F32ConvertI64S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2492,7 +2524,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.convert_f32_i64(loc, true, ret);
             }
             Operator::F32ConvertI64U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2505,7 +2537,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
 
             Operator::F64ConvertI32S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2517,7 +2549,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.convert_f64_i32(loc, true, ret);
             }
             Operator::F64ConvertI32U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2529,7 +2561,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.convert_f64_i32(loc, false, ret);
             }
             Operator::F64ConvertI64S => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2541,7 +2573,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.convert_f64_i64(loc, true, ret);
             }
             Operator::F64ConvertI64U => {
-                let loc = self.pop_value_released();
+                let loc = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -2571,9 +2603,9 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     .value_stack
                     .drain(self.value_stack.len() - param_types.len()..)
                     .collect();
-                self.release_locations_only_regs(&params);
+                self.release_locations_only_regs(&params)?;
 
-                self.release_locations_only_osr_state(params.len());
+                self.release_locations_only_osr_state(params.len())?;
 
                 // Pop arguments off the FP stack and canonicalize them if needed.
                 //
@@ -2621,7 +2653,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     param_types.iter().copied(),
                 )?;
 
-                self.release_locations_only_stack(&params);
+                self.release_locations_only_stack(&params)?;
 
                 if !return_types.is_empty() {
                     let ret = self.acquire_locations(
@@ -2660,13 +2692,13 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let return_types: SmallVec<[WpType; 1]> =
                     sig.results().iter().cloned().map(type_to_wp_type).collect();
 
-                let func_index = self.pop_value_released();
+                let func_index = self.pop_value_released()?;
 
                 let params: SmallVec<[_; 8]> = self
                     .value_stack
                     .drain(self.value_stack.len() - param_types.len()..)
                     .collect();
-                self.release_locations_only_regs(&params);
+                self.release_locations_only_regs(&params)?;
 
                 // Pop arguments off the FP stack and canonicalize them if needed.
                 //
@@ -2802,7 +2834,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     );
                 }
 
-                self.release_locations_only_osr_state(params.len());
+                self.release_locations_only_osr_state(params.len())?;
 
                 let vmcaller_checked_anyfunc_func_ptr =
                     self.vmoffsets.vmcaller_checked_anyfunc_func_ptr() as usize;
@@ -2845,7 +2877,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     param_types.iter().copied(),
                 )?;
 
-                self.release_locations_only_stack(&params);
+                self.release_locations_only_stack(&params)?;
 
                 if !return_types.is_empty() {
                     let ret = self.acquire_locations(
@@ -2877,7 +2909,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let label_end = self.machine.get_label();
                 let label_else = self.machine.get_label();
 
-                let cond = self.pop_value_released();
+                let cond = self.pop_value_released()?;
 
                 let frame = ControlFrame {
                     label: label_end,
@@ -2923,7 +2955,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let frame = &self.control_stack.last_mut().unwrap();
                 let stack_depth = frame.value_stack_depth;
                 let fp_depth = frame.fp_stack_depth;
-                self.release_locations_value(stack_depth);
+                self.release_locations_value(stack_depth)?;
                 self.value_stack.truncate(stack_depth);
                 self.fp_stack.truncate(fp_depth);
                 let mut frame = &mut self.control_stack.last_mut().unwrap();
@@ -2944,9 +2976,9 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             // `TypedSelect` must be used for extern refs so ref counting should
             // be done with TypedSelect. But otherwise they're the same.
             Operator::TypedSelect { .. } | Operator::Select => {
-                let cond = self.pop_value_released();
-                let v_b = self.pop_value_released();
-                let v_a = self.pop_value_released();
+                let cond = self.pop_value_released()?;
+                let v_b = self.pop_value_released()?;
+                let v_a = self.pop_value_released()?;
                 let cncl: Option<(Option<CanonicalizeType>, Option<CanonicalizeType>)> =
                     if self.fp_stack.len() >= 2
                         && self.fp_stack[self.fp_stack.len() - 2].depth == self.value_stack.len()
@@ -3093,7 +3125,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let len = self.value_stack.pop().unwrap();
                 let src = self.value_stack.pop().unwrap();
                 let dst = self.value_stack.pop().unwrap();
-                self.release_locations_only_regs(&[len, src, dst]);
+                self.release_locations_only_regs(&[len, src, dst])?;
 
                 self.machine.move_location(
                     Size::S64,
@@ -3107,7 +3139,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
 
                 // TODO: should this be 3?
-                self.release_locations_only_osr_state(1);
+                self.release_locations_only_osr_state(1)?;
 
                 self.emit_call_native(
                     |this| {
@@ -3134,7 +3166,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     .iter()
                     .cloned(),
                 )?;
-                self.release_locations_only_stack(&[dst, src, len]);
+                self.release_locations_only_stack(&[dst, src, len])?;
             }
             Operator::DataDrop { segment } => {
                 self.machine.move_location(
@@ -3164,7 +3196,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let len = self.value_stack.pop().unwrap();
                 let src_pos = self.value_stack.pop().unwrap();
                 let dst_pos = self.value_stack.pop().unwrap();
-                self.release_locations_only_regs(&[len, src_pos, dst_pos]);
+                self.release_locations_only_regs(&[len, src_pos, dst_pos])?;
 
                 let memory_index = MemoryIndex::new(src as usize);
                 let (memory_copy_index, memory_index) =
@@ -3190,7 +3222,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
 
                 // TODO: should this be 3?
-                self.release_locations_only_osr_state(1);
+                self.release_locations_only_osr_state(1)?;
 
                 self.emit_call_native(
                     |this| {
@@ -3210,13 +3242,13 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                         .iter()
                         .cloned(),
                 )?;
-                self.release_locations_only_stack(&[dst_pos, src_pos, len]);
+                self.release_locations_only_stack(&[dst_pos, src_pos, len])?;
             }
             Operator::MemoryFill { mem } => {
                 let len = self.value_stack.pop().unwrap();
                 let val = self.value_stack.pop().unwrap();
                 let dst = self.value_stack.pop().unwrap();
-                self.release_locations_only_regs(&[len, val, dst]);
+                self.release_locations_only_regs(&[len, val, dst])?;
 
                 let memory_index = MemoryIndex::new(mem as usize);
                 let (memory_fill_index, memory_index) =
@@ -3242,7 +3274,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
 
                 // TODO: should this be 3?
-                self.release_locations_only_osr_state(1);
+                self.release_locations_only_osr_state(1)?;
 
                 self.emit_call_native(
                     |this| {
@@ -3257,13 +3289,13 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                         .iter()
                         .cloned(),
                 )?;
-                self.release_locations_only_stack(&[dst, val, len]);
+                self.release_locations_only_stack(&[dst, val, len])?;
             }
             Operator::MemoryGrow { mem, mem_byte: _ } => {
                 let memory_index = MemoryIndex::new(mem as usize);
                 let param_pages = self.value_stack.pop().unwrap();
 
-                self.release_locations_only_regs(&[param_pages]);
+                self.release_locations_only_regs(&[param_pages])?;
 
                 self.machine.move_location(
                     Size::S64,
@@ -3280,7 +3312,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     Location::GPR(self.machine.get_grp_for_call()),
                 );
 
-                self.release_locations_only_osr_state(1);
+                self.release_locations_only_osr_state(1)?;
 
                 self.emit_call_native(
                     |this| {
@@ -3293,7 +3325,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     [WpType::I64, WpType::I64].iter().cloned(),
                 )?;
 
-                self.release_locations_only_stack(&[param_pages]);
+                self.release_locations_only_stack(&[param_pages])?;
 
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
@@ -3307,7 +3339,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32Load { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3328,7 +3360,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::F32Load { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3351,7 +3383,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32Load8U { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3372,7 +3404,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32Load8S { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3393,7 +3425,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32Load16U { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3414,7 +3446,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32Load16S { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3435,8 +3467,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32Store { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i32_save(
@@ -3452,8 +3484,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::F32Store { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 let fp = self.fp_stack.pop1()?;
                 let config_nan_canonicalization = self.config.enable_nan_canonicalization;
                 self.op_memory(
@@ -3472,8 +3504,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32Store8 { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i32_save_8(
@@ -3489,8 +3521,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32Store16 { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i32_save_16(
@@ -3506,7 +3538,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Load { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3527,7 +3559,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::F64Load { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3550,7 +3582,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Load8U { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3571,7 +3603,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Load8S { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3592,7 +3624,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Load16U { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3613,7 +3645,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Load16S { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3634,7 +3666,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Load32U { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3655,7 +3687,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Load32S { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -3676,8 +3708,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Store { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
 
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
@@ -3694,8 +3726,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::F64Store { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 let fp = self.fp_stack.pop1()?;
                 let config_nan_canonicalization = self.config.enable_nan_canonicalization;
                 self.op_memory(
@@ -3714,8 +3746,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Store8 { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i64_save_8(
@@ -3731,8 +3763,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Store16 { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i64_save_16(
@@ -3748,8 +3780,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64Store32 { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i64_save_32(
@@ -3794,7 +3826,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let frame = &self.control_stack[0];
                 let frame_depth = frame.value_stack_depth;
                 let label = frame.label;
-                self.release_locations_keep_state(frame_depth);
+                self.release_locations_keep_state(frame_depth)?;
                 self.machine.jmp_unconditionnal(label);
                 self.unreachable_depth = 1;
             }
@@ -3825,13 +3857,13 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let frame_depth = frame.value_stack_depth;
                 let label = frame.label;
 
-                self.release_locations_keep_state(frame_depth);
+                self.release_locations_keep_state(frame_depth)?;
                 self.machine.jmp_unconditionnal(label);
                 self.unreachable_depth = 1;
             }
             Operator::BrIf { relative_depth } => {
                 let after = self.machine.get_label();
-                let cond = self.pop_value_released();
+                let cond = self.pop_value_released()?;
                 self.machine
                     .emit_relaxed_cmp(Size::S32, Location::Imm32(0), cond);
                 self.machine.jmp_on_equal(after);
@@ -3862,7 +3894,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let frame = &mut self.control_stack[stack_len - 1 - (relative_depth as usize)];
                 let stack_depth = frame.value_stack_depth;
                 let label = frame.label;
-                self.release_locations_keep_state(stack_depth);
+                self.release_locations_keep_state(stack_depth)?;
                 self.machine.jmp_unconditionnal(label);
 
                 self.machine.emit_label(after);
@@ -3875,7 +3907,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                         message: format!("BrTable read_table: {:?}", e),
                     })?;
                 let default_target = table.default();
-                let cond = self.pop_value_released();
+                let cond = self.pop_value_released()?;
                 let table_label = self.machine.get_label();
                 let mut table: Vec<Label> = vec![];
                 let default_br = self.machine.get_label();
@@ -3921,7 +3953,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                         &self.control_stack[self.control_stack.len() - 1 - (*target as usize)];
                     let stack_depth = frame.value_stack_depth;
                     let label = frame.label;
-                    self.release_locations_keep_state(stack_depth);
+                    self.release_locations_keep_state(stack_depth)?;
                     self.machine.jmp_unconditionnal(label);
                 }
                 self.machine.emit_label(default_br);
@@ -3953,7 +3985,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                         [self.control_stack.len() - 1 - (default_target as usize)];
                     let stack_depth = frame.value_stack_depth;
                     let label = frame.label;
-                    self.release_locations_keep_state(stack_depth);
+                    self.release_locations_keep_state(stack_depth)?;
                     self.machine.jmp_unconditionnal(label);
                 }
 
@@ -3964,7 +3996,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.unreachable_depth = 1;
             }
             Operator::Drop => {
-                self.pop_value_released();
+                self.pop_value_released()?;
                 if let Some(x) = self.fp_stack.last() {
                     if x.depth == self.value_stack.len() {
                         self.fp_stack.pop1()?;
@@ -4003,7 +4035,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     self.machine.emit_ret();
                 } else {
                     let released = &self.value_stack.clone()[frame.value_stack_depth..];
-                    self.release_locations(released);
+                    self.release_locations(released)?;
                     self.value_stack.truncate(frame.value_stack_depth);
                     self.fp_stack.truncate(frame.fp_stack_depth);
 
@@ -4053,7 +4085,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 self.machine.emit_memory_fence();
             }
             Operator::I32AtomicLoad { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4074,7 +4106,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicLoad8U { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4095,7 +4127,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicLoad16U { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4116,8 +4148,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicStore { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i32_atomic_save(
@@ -4133,8 +4165,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicStore8 { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i32_atomic_save_8(
@@ -4150,8 +4182,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicStore16 { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i32_atomic_save_16(
@@ -4167,7 +4199,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicLoad { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4188,7 +4220,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicLoad8U { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4209,7 +4241,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicLoad16U { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4230,7 +4262,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicLoad32U { ref memarg } => {
-                let target = self.pop_value_released();
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4251,8 +4283,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicStore { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i64_atomic_save(
@@ -4268,8 +4300,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicStore8 { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i64_atomic_save_8(
@@ -4285,8 +4317,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicStore16 { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i64_atomic_save_16(
@@ -4302,8 +4334,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicStore32 { ref memarg } => {
-                let target_value = self.pop_value_released();
-                let target_addr = self.pop_value_released();
+                let target_value = self.pop_value_released()?;
+                let target_addr = self.pop_value_released()?;
                 self.op_memory(
                     |this, need_check, imported_memories, offset, heap_access_oob| {
                         this.machine.i64_atomic_save_32(
@@ -4319,8 +4351,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmwAdd { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4342,8 +4374,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmwAdd { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4365,8 +4397,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw8AddU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4388,8 +4420,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw16AddU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4411,8 +4443,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw8AddU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4434,8 +4466,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw16AddU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4457,8 +4489,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw32AddU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4480,8 +4512,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmwSub { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4503,8 +4535,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmwSub { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4526,8 +4558,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw8SubU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4549,8 +4581,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw16SubU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4572,8 +4604,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw8SubU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4595,8 +4627,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw16SubU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4618,8 +4650,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw32SubU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4641,8 +4673,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmwAnd { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4664,8 +4696,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmwAnd { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4687,8 +4719,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw8AndU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4710,8 +4742,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw16AndU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4733,8 +4765,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw8AndU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4756,8 +4788,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw16AndU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4779,8 +4811,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw32AndU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4802,8 +4834,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmwOr { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4825,8 +4857,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmwOr { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4848,8 +4880,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw8OrU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4871,8 +4903,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw16OrU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4894,8 +4926,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw8OrU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4917,8 +4949,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw16OrU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4940,8 +4972,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw32OrU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4963,8 +4995,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmwXor { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -4986,8 +5018,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmwXor { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5009,8 +5041,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw8XorU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5032,8 +5064,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw16XorU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5055,8 +5087,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw8XorU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5078,8 +5110,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw16XorU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5101,8 +5133,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw32XorU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5124,8 +5156,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmwXchg { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5147,8 +5179,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmwXchg { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5170,8 +5202,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw8XchgU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5193,8 +5225,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw16XchgU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5216,8 +5248,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw8XchgU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5239,8 +5271,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw16XchgU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5262,8 +5294,8 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw32XchgU { ref memarg } => {
-                let loc = self.pop_value_released();
-                let target = self.pop_value_released();
+                let loc = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5285,9 +5317,9 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmwCmpxchg { ref memarg } => {
-                let new = self.pop_value_released();
-                let cmp = self.pop_value_released();
-                let target = self.pop_value_released();
+                let new = self.pop_value_released()?;
+                let cmp = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5310,9 +5342,9 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmwCmpxchg { ref memarg } => {
-                let new = self.pop_value_released();
-                let cmp = self.pop_value_released();
-                let target = self.pop_value_released();
+                let new = self.pop_value_released()?;
+                let cmp = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5335,9 +5367,9 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw8CmpxchgU { ref memarg } => {
-                let new = self.pop_value_released();
-                let cmp = self.pop_value_released();
-                let target = self.pop_value_released();
+                let new = self.pop_value_released()?;
+                let cmp = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5360,9 +5392,9 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I32AtomicRmw16CmpxchgU { ref memarg } => {
-                let new = self.pop_value_released();
-                let cmp = self.pop_value_released();
-                let target = self.pop_value_released();
+                let new = self.pop_value_released()?;
+                let cmp = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5385,9 +5417,9 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw8CmpxchgU { ref memarg } => {
-                let new = self.pop_value_released();
-                let cmp = self.pop_value_released();
-                let target = self.pop_value_released();
+                let new = self.pop_value_released()?;
+                let cmp = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5410,9 +5442,9 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw16CmpxchgU { ref memarg } => {
-                let new = self.pop_value_released();
-                let cmp = self.pop_value_released();
-                let target = self.pop_value_released();
+                let new = self.pop_value_released()?;
+                let cmp = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5435,9 +5467,9 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::I64AtomicRmw32CmpxchgU { ref memarg } => {
-                let new = self.pop_value_released();
-                let cmp = self.pop_value_released();
-                let target = self.pop_value_released();
+                let new = self.pop_value_released()?;
+                let cmp = self.pop_value_released()?;
+                let target = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I64, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5503,7 +5535,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
             }
             Operator::RefIsNull => {
-                let loc_a = self.pop_value_released();
+                let loc_a = self.pop_value_released()?;
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
                     false,
@@ -5516,7 +5548,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let value = self.value_stack.pop().unwrap();
                 let index = self.value_stack.pop().unwrap();
                 // double check this does what I think it does
-                self.release_locations_only_regs(&[value, index]);
+                self.release_locations_only_regs(&[value, index])?;
 
                 self.machine.move_location(
                     Size::S64,
@@ -5534,7 +5566,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
 
                 // TODO: should this be 2?
-                self.release_locations_only_osr_state(1);
+                self.release_locations_only_osr_state(1)?;
                 self.emit_call_native(
                     |this| {
                         this.machine
@@ -5547,12 +5579,12 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     [WpType::I32, WpType::I64, WpType::I64].iter().cloned(),
                 )?;
 
-                self.release_locations_only_stack(&[index, value]);
+                self.release_locations_only_stack(&[index, value])?;
             }
             Operator::TableGet { table: index } => {
                 let table_index = TableIndex::new(index as _);
                 let index = self.value_stack.pop().unwrap();
-                self.release_locations_only_regs(&[index]);
+                self.release_locations_only_regs(&[index])?;
 
                 self.machine.move_location(
                     Size::S64,
@@ -5569,7 +5601,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     Location::GPR(self.machine.get_grp_for_call()),
                 );
 
-                self.release_locations_only_osr_state(1);
+                self.release_locations_only_osr_state(1)?;
                 self.emit_call_native(
                     |this| {
                         this.machine
@@ -5582,7 +5614,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     [WpType::I32, WpType::I64].iter().cloned(),
                 )?;
 
-                self.release_locations_only_stack(&[index]);
+                self.release_locations_only_stack(&[index])?;
 
                 let ret = self.acquire_locations(
                     &[(
@@ -5641,7 +5673,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let table_index = TableIndex::new(index as _);
                 let delta = self.value_stack.pop().unwrap();
                 let init_value = self.value_stack.pop().unwrap();
-                self.release_locations_only_regs(&[delta, init_value]);
+                self.release_locations_only_regs(&[delta, init_value])?;
 
                 self.machine.move_location(
                     Size::S64,
@@ -5659,7 +5691,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
 
                 // TODO: should this be 2?
-                self.release_locations_only_osr_state(1);
+                self.release_locations_only_osr_state(1)?;
                 self.emit_call_native(
                     |this| {
                         this.machine
@@ -5676,7 +5708,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     [WpType::I64, WpType::I64, WpType::I64].iter().cloned(),
                 )?;
 
-                self.release_locations_only_stack(&[init_value, delta]);
+                self.release_locations_only_stack(&[init_value, delta])?;
 
                 let ret = self.acquire_locations(
                     &[(WpType::I32, MachineValue::WasmStack(self.value_stack.len()))],
@@ -5696,7 +5728,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 let len = self.value_stack.pop().unwrap();
                 let src = self.value_stack.pop().unwrap();
                 let dest = self.value_stack.pop().unwrap();
-                self.release_locations_only_regs(&[len, src, dest]);
+                self.release_locations_only_regs(&[len, src, dest])?;
 
                 self.machine.move_location(
                     Size::S64,
@@ -5710,7 +5742,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
 
                 // TODO: should this be 3?
-                self.release_locations_only_osr_state(1);
+                self.release_locations_only_osr_state(1)?;
                 self.emit_call_native(
                     |this| {
                         this.machine
@@ -5737,14 +5769,14 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     .cloned(),
                 )?;
 
-                self.release_locations_only_stack(&[dest, src, len]);
+                self.release_locations_only_stack(&[dest, src, len])?;
             }
 
             Operator::TableFill { table } => {
                 let len = self.value_stack.pop().unwrap();
                 let val = self.value_stack.pop().unwrap();
                 let dest = self.value_stack.pop().unwrap();
-                self.release_locations_only_regs(&[len, val, dest]);
+                self.release_locations_only_regs(&[len, val, dest])?;
 
                 self.machine.move_location(
                     Size::S64,
@@ -5758,7 +5790,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
 
                 // TODO: should this be 3?
-                self.release_locations_only_osr_state(1);
+                self.release_locations_only_osr_state(1)?;
                 self.emit_call_native(
                     |this| {
                         this.machine
@@ -5771,13 +5803,13 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                         .cloned(),
                 )?;
 
-                self.release_locations_only_stack(&[dest, val, len]);
+                self.release_locations_only_stack(&[dest, val, len])?;
             }
             Operator::TableInit { segment, table } => {
                 let len = self.value_stack.pop().unwrap();
                 let src = self.value_stack.pop().unwrap();
                 let dest = self.value_stack.pop().unwrap();
-                self.release_locations_only_regs(&[len, src, dest]);
+                self.release_locations_only_regs(&[len, src, dest])?;
 
                 self.machine.move_location(
                     Size::S64,
@@ -5791,7 +5823,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                 );
 
                 // TODO: should this be 3?
-                self.release_locations_only_osr_state(1);
+                self.release_locations_only_osr_state(1)?;
                 self.emit_call_native(
                     |this| {
                         this.machine
@@ -5818,7 +5850,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
                     .cloned(),
                 )?;
 
-                self.release_locations_only_stack(&[dest, src, len]);
+                self.release_locations_only_stack(&[dest, src, len])?;
             }
             Operator::ElemDrop { segment } => {
                 self.machine.move_location(
