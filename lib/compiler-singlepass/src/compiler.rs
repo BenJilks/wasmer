@@ -94,7 +94,9 @@ impl Compiler for SinglepassCompiler {
             Ok(CallingConvention::WindowsFastcall) => CallingConvention::WindowsFastcall,
             Ok(CallingConvention::SystemV) => CallingConvention::SystemV,
             Ok(CallingConvention::AppleAarch64) => CallingConvention::AppleAarch64,
-            _ => panic!("Unsupported Calling convention for Singlepass compiler"),
+            _ => return Err(CompileError::UnsupportedTarget(
+                "Unsupported Calling convention for Singlepass compiler".to_string(),
+            )),
         };
 
         // Generate the frametable

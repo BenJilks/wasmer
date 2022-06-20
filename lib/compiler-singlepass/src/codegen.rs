@@ -1,4 +1,5 @@
 use crate::address_map::get_function_address_map;
+use crate::codegen_error;
 #[cfg(feature = "unwind")]
 use crate::dwarf::WriterRelocate;
 use crate::location::{Location, Reg};
@@ -126,26 +127,28 @@ impl FloatValue {
         }
     }
 
-    fn promote(self, depth: usize) -> FloatValue {
-        FloatValue {
+    fn promote(self, depth: usize) -> Result<FloatValue, CodegenError> {
+        let ret = FloatValue {
             canonicalization: match self.canonicalization {
                 Some(CanonicalizeType::F32) => Some(CanonicalizeType::F64),
-                Some(CanonicalizeType::F64) => panic!("cannot promote F64"),
+                Some(CanonicalizeType::F64) => codegen_error!("cannot promote F64"),
                 None => None,
             },
             depth,
-        }
+        };
+        Ok(ret)
     }
 
-    fn demote(self, depth: usize) -> FloatValue {
-        FloatValue {
+    fn demote(self, depth: usize) -> Result<FloatValue, CodegenError> {
+        let ret = FloatValue {
             canonicalization: match self.canonicalization {
                 Some(CanonicalizeType::F64) => Some(CanonicalizeType::F32),
-                Some(CanonicalizeType::F32) => panic!("cannot demote F32"),
+                Some(CanonicalizeType::F32) => codegen_error!("cannot demote F32"),
                 None => None,
             },
             depth,
-        }
+        };
+        Ok(ret)
     }
 }
 
@@ -2170,7 +2173,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
 
             Operator::F64PromoteF32 => {
                 let fp = self.fp_stack.pop1()?;
-                self.fp_stack.push(fp.promote(self.value_stack.len() - 1));
+                self.fp_stack.push(fp.promote(self.value_stack.len() - 1)?);
                 let loc = self.pop_value_released();
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],
@@ -2181,7 +2184,7 @@ impl<'a, M: Machine> FuncGen<'a, M> {
             }
             Operator::F32DemoteF64 => {
                 let fp = self.fp_stack.pop1()?;
-                self.fp_stack.push(fp.demote(self.value_stack.len() - 1));
+                self.fp_stack.push(fp.demote(self.value_stack.len() - 1)?);
                 let loc = self.pop_value_released();
                 let ret = self.acquire_locations(
                     &[(WpType::F64, MachineValue::WasmStack(self.value_stack.len()))],

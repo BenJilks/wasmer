@@ -31,6 +31,11 @@ pub struct CodegenError {
     pub message: String,
 }
 
+#[macro_export]
+macro_rules! codegen_error {
+    ($e:expr) => {return Err(CodegenError{message : format!($e)})}
+}
+
 pub trait MaybeImmediate {
     fn imm_value(&self) -> Option<Value>;
     fn is_imm(&self) -> bool {
