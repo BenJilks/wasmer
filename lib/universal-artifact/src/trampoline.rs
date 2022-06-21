@@ -19,6 +19,13 @@ const AARCH64_TRAMPOLINE: [u8; 16] = [
     0x51, 0x00, 0x00, 0x58, 0x20, 0x02, 0x1f, 0xd6, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
+// LDR r12, [PC, #4]  DF F8 04 C0
+// BX r12             60 47
+// JMPADDR            00 00 00 00
+const ARM_TRAMPOLINE: [u8; 10] = [
+    0xDF, 0xF8, 0x04, 0xC0, 0x60, 0x47, 0x00, 0x00, 0x00, 0x00,
+];
+
 // 2 padding bytes are used to preserve alignment.
 // JMP [RIP + 2]   FF 25 02 00 00 00 [00 00]
 // 64-bit ADDR     00 00 00 00 00 00 00 00
@@ -42,6 +49,15 @@ fn make_trampoline(
                 addend: 0,
             });
         }
+        Architecture::Arm(_) => {
+            code.extend(&ARM_TRAMPOLINE);
+            relocations.push(Relocation {
+                kind: RelocationKind::Abs4,
+                reloc_target: RelocationTarget::LibCall(libcall),
+                offset: code.len() as u32 - 4,
+                addend: 0,
+            });
+        }
         Architecture::X86_64 => {
             code.extend(&X86_64_TRAMPOLINE);
             relocations.push(Relocation {
@@ -59,6 +75,7 @@ fn make_trampoline(
 pub fn libcall_trampoline_len(target: &Target) -> usize {
     match target.triple().architecture {
         Architecture::Aarch64(_) => AARCH64_TRAMPOLINE.len(),
+        Architecture::Arm(_) => ARM_TRAMPOLINE.len(),
         Architecture::X86_64 => X86_64_TRAMPOLINE.len(),
         arch => panic!("Unsupported architecture: {}", arch),
     }

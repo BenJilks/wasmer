@@ -30,7 +30,7 @@ loupe = "0.1"
 package = "inkwell"
 version = "0.1.0-beta.4"
 default-features = false
-features = ["llvm12-0", "target-x86", "target-aarch64"]
+features = ["llvm12-0", "target-x86", "target-aarch64", "target-arm"]
 
 [build-dependencies]
 cc = "1.0"

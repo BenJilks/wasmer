@@ -123,6 +123,14 @@ impl Relocation {
                     .unwrap();
                 (reloc_address, reloc_abs)
             }
+            RelocationKind::Abs4 => {
+                let reloc_address = start + self.offset as usize;
+                let reloc_addend = self.addend as isize;
+                let reloc_abs_u32 = (target_func_address as u32)
+                    .checked_add(reloc_addend as u32)
+                    .unwrap();
+                (reloc_address, reloc_abs_u32 as u64)
+            }
             RelocationKind::X86PCRel4 => {
                 let reloc_address = start + self.offset as usize;
                 let reloc_addend = self.addend as isize;
