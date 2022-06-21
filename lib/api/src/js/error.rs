@@ -1,4 +1,5 @@
 use crate::js::lib::std::string::String;
+use crate::js::trap::RuntimeError;
 #[cfg(feature = "std")]
 use thiserror::Error;
 
@@ -123,4 +124,36 @@ pub enum DeserializeError {
     /// trying to allocate the required resources.
     #[cfg_attr(feature = "std", error(transparent))]
     Compiler(CompileError),
+}
+
+/// An error while instantiating a module.
+///
+/// This is not a common WebAssembly error, however
+/// we need to differentiate from a `LinkError` (an error
+/// that happens while linking, on instantiation), a
+/// Trap that occurs when calling the WebAssembly module
+/// start function, and an error when initializing the user's
+/// host environments.
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(Error))]
+pub enum InstantiationError {
+    /// A linking ocurred during instantiation.
+    #[cfg_attr(feature = "std", error("Link error: {0}"))]
+    Link(String),
+
+    /// A runtime error occured while invoking the start function
+    #[cfg_attr(feature = "std", error(transparent))]
+    Start(RuntimeError),
+
+    /// Import from a different [`Context`].
+    /// This error occurs when an import from a different context is used.
+    #[cfg_attr(feature = "std", error("cannot mix imports from different contexts"))]
+    BadContext,
+}
+
+#[cfg(feature = "core")]
+impl std::fmt::Display for InstantiationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "InstantiationError")
+    }
 }

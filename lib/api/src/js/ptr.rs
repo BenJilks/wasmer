@@ -1,3 +1,4 @@
+use crate::js::NativeWasmTypeInto;
 use crate::js::{externals::Memory, FromToNativeWasmType};
 use crate::{MemoryAccessError, WasmRef, WasmSlice};
 use std::convert::TryFrom;
@@ -218,7 +219,10 @@ impl<M: MemorySize> WasmPtr<u8, M> {
     }
 }
 
-unsafe impl<T: ValueType, M: MemorySize> FromToNativeWasmType for WasmPtr<T, M> {
+unsafe impl<T: ValueType, M: MemorySize> FromToNativeWasmType for WasmPtr<T, M>
+where
+    <M as wasmer_types::MemorySize>::Native: NativeWasmTypeInto,
+{
     type Native = M::Native;
 
     fn to_native(self) -> Self::Native {

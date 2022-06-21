@@ -43,7 +43,7 @@ mod sys {
     #[test]
     fn unit_native_function_env() -> Result<()> {
         let store = Store::default();
-        #[derive(WasmerEnv, Clone)]
+        #[derive(Clone)]
         struct Env {
             multiplier: u32,
         }

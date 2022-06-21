@@ -106,10 +106,9 @@ mod sys {
 
     #[test]
     fn strong_weak_behavior_works_memory() -> Result<()> {
-        #[derive(Clone, Debug, WasmerEnv, Default)]
+        #[derive(Clone, Debug, Default)]
         struct MemEnv {
-            #[wasmer(export)]
-            memory: LazyInit<Memory>,
+            memory: Option<Memory>,
         }
 
         let host_fn = |env: &MemEnv| {
@@ -150,10 +149,9 @@ mod sys {
 
     #[test]
     fn strong_weak_behavior_works_global() -> Result<()> {
-        #[derive(Clone, Debug, WasmerEnv, Default)]
+        #[derive(Clone, Debug, Default)]
         struct GlobalEnv {
-            #[wasmer(export)]
-            global: LazyInit<Global>,
+            global: Option<Global>,
         }
 
         let host_fn = |env: &GlobalEnv| {
@@ -194,10 +192,9 @@ mod sys {
 
     #[test]
     fn strong_weak_behavior_works_table() -> Result<()> {
-        #[derive(Clone, WasmerEnv, Default)]
+        #[derive(Clone, Default)]
         struct TableEnv {
-            #[wasmer(export)]
-            table: LazyInit<Table>,
+            table: Option<Table>,
         }
 
         let host_fn = |env: &TableEnv| {
@@ -238,10 +235,9 @@ mod sys {
 
     #[test]
     fn strong_weak_behavior_works_function() -> Result<()> {
-        #[derive(Clone, WasmerEnv, Default)]
+        #[derive(Clone, Default)]
         struct FunctionEnv {
-            #[wasmer(export)]
-            call_host_fn: LazyInit<Function>,
+            call_host_fn: Option<Function>,
         }
 
         let host_fn = |env: &FunctionEnv| {
@@ -282,10 +278,9 @@ mod sys {
 
     #[test]
     fn strong_weak_behavior_works_native_function() -> Result<()> {
-        #[derive(Clone, WasmerEnv, Default)]
+        #[derive(Clone, Default)]
         struct FunctionEnv {
-            #[wasmer(export)]
-            call_host_fn: LazyInit<TypedFunction<(), ()>>,
+            call_host_fn: Option<TypedFunction<(), ()>>,
         }
 
         let host_fn = |env: &FunctionEnv| {

@@ -211,7 +211,7 @@ mod sys {
     #[test]
     fn function_new_env() -> Result<()> {
         let store = Store::default();
-        #[derive(Clone, WasmerEnv)]
+        #[derive(Clone)]
         struct MyEnv {}
 
         let my_env = MyEnv {};
@@ -284,7 +284,7 @@ mod sys {
     #[test]
     fn function_new_dynamic_env() -> Result<()> {
         let store = Store::default();
-        #[derive(Clone, WasmerEnv)]
+        #[derive(Clone)]
         struct MyEnv {}
         let my_env = MyEnv {};
 
@@ -438,10 +438,10 @@ mod sys {
     #[test]
     fn manually_generate_wasmer_env() -> Result<()> {
         let store = Store::default();
-        #[derive(WasmerEnv, Clone)]
+        #[derive(Clone)]
         struct MyEnv {
             val: u32,
-            memory: LazyInit<Memory>,
+            memory: Option<Memory>,
         }
 
         fn host_function(env: &mut MyEnv, arg1: u32, arg2: u32) -> u32 {
@@ -450,7 +450,7 @@ mod sys {
 
         let mut env = MyEnv {
             val: 5,
-            memory: LazyInit::new(),
+            memory: None,
         };
 
         let result = host_function(&mut env, 7, 9);

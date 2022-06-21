@@ -211,7 +211,7 @@ mod js {
             })
             .unwrap();
 
-        #[derive(WasmerEnv, Clone)]
+        #[derive(Clone)]
         struct Env {
             multiplier: i32,
         }
@@ -317,7 +317,7 @@ mod js {
             })
             .unwrap();
 
-        #[derive(WasmerEnv, Clone)]
+        #[derive(Clone)]
         struct Env {
             multiplier: u32,
         }
@@ -370,11 +370,10 @@ mod js {
             })
             .unwrap();
 
-        #[derive(WasmerEnv, Clone)]
+        #[derive(Clone)]
         struct Env {
             multiplier: u32,
-            #[wasmer(export)]
-            memory: LazyInit<Memory>,
+            memory: Option<Memory>,
         }
 
         fn imported_fn(env: &Env, arg: u32) -> u32 {
@@ -387,7 +386,7 @@ mod js {
             &store,
             Env {
                 multiplier: 3,
-                memory: LazyInit::new(),
+                memory: None,
             },
             imported_fn,
         );
@@ -423,7 +422,7 @@ mod js {
     #[wasm_bindgen_test]
     fn test_unit_native_function_env() {
         let store = Store::default();
-        #[derive(WasmerEnv, Clone)]
+        #[derive(Clone)]
         struct Env {
             multiplier: u32,
         }
@@ -474,11 +473,10 @@ mod js {
             })
             .unwrap();
 
-        #[derive(WasmerEnv, Clone)]
+        #[derive(Clone)]
         struct Env {
             multiplier: u32,
-            #[wasmer(export)]
-            memory: LazyInit<Memory>,
+            memory: Option<Memory>,
         }
 
         fn imported_fn(env: &Env, args: &[Val]) -> Result<Vec<Val>, RuntimeError> {
@@ -494,7 +492,7 @@ mod js {
             imported_signature,
             Env {
                 multiplier: 3,
-                memory: LazyInit::new(),
+                memory: None,
             },
             imported_fn,
         );
